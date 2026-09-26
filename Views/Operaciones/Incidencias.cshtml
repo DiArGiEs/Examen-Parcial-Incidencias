@@ -5,10 +5,9 @@
 }
 
 <div class="container mt-4">
-    <!-- TÍTULO ESPECÍFICO DE LA PREGUNTA 1 (RAMA A) -->
-    <h1>Incidencias abiertas encontradas</h1>
+    <!-- TÍTULO COMBINADO TRAS RESOLVER 1.ER CONFLICTO -->
+    <h1>Incidencias abiertas encontradas con consulta rápida</h1>
 
-    <!-- Formulario de Búsqueda Algolia -->
     <form method="get" asp-action="Incidencias" class="row g-2 mb-3 mt-2">
         <div class="col-auto">
             <input type="text" name="q" value="@ViewData["CurrentFilter"]" class="form-control" placeholder="Buscar por estación o descripción..." />
