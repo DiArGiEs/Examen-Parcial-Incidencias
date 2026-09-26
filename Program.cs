@@ -18,6 +18,8 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.InstanceName = "IncidenciasCache_";
 });
 
+builder.Services.AddHttpClient();
+
 builder.Services.AddControllersWithViews();
 
 var app = builder.Build();

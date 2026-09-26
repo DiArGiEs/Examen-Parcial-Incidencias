@@ -5,9 +5,10 @@
 }
 
 <div class="container mt-4">
-    <!-- TÍTULO COMBINADO TRAS RESOLVER 1.ER CONFLICTO -->
-    <h1>Incidencias abiertas encontradas con consulta rápida</h1>
+    <!-- TÍTULO FINAL INTEGRADO TRAS RESOLVER EL 2.º CONFLICTO -->
+    <h1>Incidencias abiertas encontradas con consulta rápida en tiempo real</h1>
 
+    <!-- Formulario Búsqueda Algolia -->
     <form method="get" asp-action="Incidencias" class="row g-2 mb-3 mt-2">
         <div class="col-auto">
             <input type="text" name="q" value="@ViewData["CurrentFilter"]" class="form-control" placeholder="Buscar por estación o descripción..." />
@@ -19,7 +20,7 @@
     </form>
 
     <div class="table-responsive mt-3">
-        <table class="table table-striped table-hover align-middle">
+        <table class="table table-striped table-hover align-middle" id="tabla-incidencias">
             <thead class="table-dark">
                 <tr>
                     <th>ID</th>
@@ -35,7 +36,7 @@
                 {
                     @foreach (var item in Model)
                     {
-                        <tr>
+                        <tr id="incidencia-row-@item.Id">
                             <td>@item.Id</td>
                             <td>@item.Estacion</td>
                             <td>@item.Descripcion</td>
@@ -63,3 +64,39 @@
         </table>
     </div>
 </div>
+
+@section Scripts {
+    <script>
+        const wsUrl = "wss://pubsub.piehost.com/v1/subscribe?channel=incidencias-channel&apikey=DUMMY_KEY";
+        let socket;
+
+        function connectWebSocket() {
+            socket = new WebSocket(wsUrl);
+
+            socket.onmessage = function (event) {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.event_name === "IncidenciaActualizada" && msg.data) {
+                        const incidenciaId = msg.data.id;
+                        const nuevoEstado = msg.data.estado;
+
+                        if (nuevoEstado === "Cerrada") {
+                            const fila = document.getElementById("incidencia-row-" + incidenciaId);
+                            if (fila) {
+                                fila.remove();
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error al procesar mensaje WebSocket:", e);
+                }
+            };
+
+            socket.onclose = function () {
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        connectWebSocket();
+    </script>
+}

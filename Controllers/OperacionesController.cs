@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Algolia.Search.Clients;
 using Algolia.Search.Models.Search;
@@ -14,6 +15,7 @@ namespace Examen_Parcial_Incidencias.Controllers
         private readonly ApplicationDbContext _context;
         private readonly IDistributedCache _cache;
         private readonly IConfiguration _configuration;
+        private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<OperacionesController> _logger;
         private const string CacheKey = "ListadoIncidenciasAbiertas";
 
@@ -21,11 +23,13 @@ namespace Examen_Parcial_Incidencias.Controllers
             ApplicationDbContext context,
             IDistributedCache cache,
             IConfiguration configuration,
+            IHttpClientFactory httpClientFactory,
             ILogger<OperacionesController> logger)
         {
             _context = context;
             _cache = cache;
             _configuration = configuration;
+            _httpClientFactory = httpClientFactory;
             _logger = logger;
         }
 
@@ -35,7 +39,7 @@ namespace Examen_Parcial_Incidencias.Controllers
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                _logger.LogInformation("Consulta con filtro 'q': consultando Algolia / BD sin usar caché.");
+                _logger.LogInformation("Consulta con filtro 'q': buscando en Algolia/BD sin consultar caché.");
                 try
                 {
                     var appId = _configuration["Algolia:AppId"];
@@ -125,6 +129,29 @@ namespace Examen_Parcial_Incidencias.Controllers
                 catch (Exception ex)
                 {
                     _logger.LogWarning("Error al invalidar Redis: {Message}", ex.Message);
+                }
+
+                try
+                {
+                    var pieHostEndpoint = _configuration["PieHost:PublishUrl"] ?? "https://pubsub.piehost.com/publish";
+                    var apiKey = _configuration["PieHost:ApiKey"] ?? "DUMMY_KEY";
+
+                    var payload = new
+                    {
+                        event_name = "IncidenciaActualizada",
+                        data = new { id = incidencia.Id, estado = incidencia.Estado }
+                    };
+
+                    var client = _httpClientFactory.CreateClient();
+                    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                    client.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+
+                    var response = await client.PostAsync(pieHostEndpoint, content);
+                    _logger.LogInformation("PieHost publicado con código: {StatusCode}", response.StatusCode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error al publicar evento en PieHost.");
                 }
             }
             return RedirectToAction(nameof(Incidencias));
