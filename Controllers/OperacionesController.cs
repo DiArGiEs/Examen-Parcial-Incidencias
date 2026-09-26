@@ -33,13 +33,7 @@ namespace Examen_Parcial_Incidencias.Controllers
                     if (!string.IsNullOrEmpty(appId) && !string.IsNullOrEmpty(apiKey))
                     {
                         var client = new SearchClient(appId, apiKey);
-                        var searchParams = new SearchForHits
-                        {
-                            IndexName = indexName,
-                            Query = q
-                        };
-
-                        var response = await client.SearchSingleIndexAsync<Incidencia>(searchParams);
+                        var response = await client.SearchSingleIndexAsync<Incidencia>(indexName, q);
                         var idsAlgolia = response.Hits.Select(h => h.Id).ToList();
                         query = query.Where(i => idsAlgolia.Contains(i.Id));
                     }
