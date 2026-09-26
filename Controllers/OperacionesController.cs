@@ -1,59 +1,101 @@
+using System.Text.Json;
 using Examen_Parcial_Incidencias.Data;
-using Microsoft.AspNetCore.Identity;
+using Examen_Parcial_Incidencias.Models;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 
-var builder = WebApplication.CreateBuilder(args);
-
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? "Data Source=app.db";
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlite(connectionString));
-
-builder.Services.AddDefaultIdentity<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = false)
-    .AddEntityFrameworkStores<ApplicationDbContext>();
-
-builder.Services.AddStackExchangeRedisCache(options =>
+namespace Examen_Parcial_Incidencias.Controllers
 {
-    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    options.InstanceName = "IncidenciasCache_";
-});
-
-builder.Services.AddControllersWithViews();
-
-var app = builder.Build();
-
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Home/Error");
-    app.UseHsts();
-}
-
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-
-app.UseRouting();
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapControllerRoute(
-    name: "default",
-    pattern: "{controller=Operaciones}/{action=Incidencias}/{id?}");
-app.MapRazorPages();
-
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    db.Database.EnsureCreated();
-    if (!db.Incidencias.Any())
+    public class OperacionesController : Controller
     {
-        db.Incidencias.AddRange(
-            new Examen_Parcial_Incidencias.Models.Incidencia { Estacion = "Estación Central", Descripcion = "Freno trasero defectuoso", Prioridad = "Alta", Estado = "Abierta" },
-            new Examen_Parcial_Incidencias.Models.Incidencia { Estacion = "Estación Miraflores", Descripcion = "Cadena suelta en bicicleta #42", Prioridad = "Media", Estado = "Abierta" },
-            new Examen_Parcial_Incidencias.Models.Incidencia { Estacion = "Estación San Isidro", Descripcion = "Luz delantera rota", Prioridad = "Baja", Estado = "Cerrada" }
-        );
-        db.SaveChanges();
+        private readonly ApplicationDbContext _context;
+        private readonly IDistributedCache _cache;
+        private readonly ILogger<OperacionesController> _logger;
+        private const string CacheKey = "ListadoIncidenciasAbiertas";
+
+        public OperacionesController(ApplicationDbContext context, IDistributedCache cache, ILogger<OperacionesController> logger)
+        {
+            _context = context;
+            _cache = cache;
+            _logger = logger;
+        }
+
+        public async Task<IActionResult> Incidencias(string? q)
+        {
+            List<Incidencia>? result = null;
+
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                _logger.LogInformation("Consulta con filtro 'q': omitiendo caché y consultando BD.");
+                result = await _context.Incidencias
+                    .Where(i => i.Estado == "Abierta" && (i.Estacion.Contains(q) || i.Descripcion.Contains(q)))
+                    .ToListAsync();
+            }
+            else
+            {
+                string? cachedData = null;
+                try
+                {
+                    cachedData = await _cache.GetStringAsync(CacheKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Redis no disponible en desarrollo local: {Message}", ex.Message);
+                }
+
+                if (!string.IsNullOrEmpty(cachedData))
+                {
+                    _logger.LogInformation("HIT: Lectura realizada directamente desde REDIS.");
+                    result = JsonSerializer.Deserialize<List<Incidencia>>(cachedData);
+                }
+                else
+                {
+                    _logger.LogInformation("MISS: Lectura realizada desde la BASE DE DATOS.");
+                    result = await _context.Incidencias
+                        .Where(i => i.Estado == "Abierta")
+                        .ToListAsync();
+
+                    try
+                    {
+                        var options = new DistributedCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60)
+                        };
+                        var serialized = JsonSerializer.Serialize(result);
+                        await _cache.SetStringAsync(CacheKey, serialized, options);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("No se pudo guardar la clave en Redis: {Message}", ex.Message);
+                    }
+                }
+            }
+
+            ViewData["CurrentFilter"] = q;
+            return View(result);
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> Cerrar(int id)
+        {
+            var incidencia = await _context.Incidencias.FindAsync(id);
+            if (incidencia != null)
+            {
+                incidencia.Estado = "Cerrada";
+                await _context.SaveChangesAsync();
+
+                try
+                {
+                    await _cache.RemoveAsync(CacheKey);
+                    _logger.LogInformation("INVALIDACIÓN: Clave {CacheKey} eliminada de Redis.", CacheKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("No se pudo invalidar Redis: {Message}", ex.Message);
+                }
+            }
+            return RedirectToAction(nameof(Incidencias));
+        }
     }
 }
-
-app.Run();
