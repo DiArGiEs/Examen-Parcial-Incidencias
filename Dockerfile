@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
+FFROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
 WORKDIR /src
 COPY . .
 RUN dotnet restore
