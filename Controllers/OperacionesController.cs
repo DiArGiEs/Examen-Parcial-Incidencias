@@ -1,4 +1,5 @@
 using Algolia.Search.Clients;
+using Algolia.Search.Models.Search;
 using Examen_Parcial_Incidencias.Data;
 using Examen_Parcial_Incidencias.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -25,16 +26,27 @@ namespace Examen_Parcial_Incidencias.Controllers
             {
                 try
                 {
-                    var appId = _configuration["Algolia:AppId"] ?? "DUMMY_APP_ID";
-                    var apiKey = _configuration["Algolia:ApiKey"] ?? "DUMMY_SEARCH_KEY";
+                    var appId = _configuration["Algolia:AppId"];
+                    var apiKey = _configuration["Algolia:ApiKey"];
                     var indexName = _configuration["Algolia:IndexName"] ?? "incidencias";
 
-                    var client = new SearchClient(appId, apiKey);
-                    var index = client.InitIndex(indexName);
-                    var searchResult = await index.SearchAsync<Incidencia>(new Algolia.Search.Models.Search.Query(q));
+                    if (!string.IsNullOrEmpty(appId) && !string.IsNullOrEmpty(apiKey))
+                    {
+                        var client = new SearchClient(appId, apiKey);
+                        var searchParams = new SearchForHits
+                        {
+                            IndexName = indexName,
+                            Query = q
+                        };
 
-                    var idsAlgolia = searchResult.Hits.Select(h => h.Id).ToList();
-                    query = query.Where(i => idsAlgolia.Contains(i.Id));
+                        var response = await client.SearchSingleIndexAsync<Incidencia>(searchParams);
+                        var idsAlgolia = response.Hits.Select(h => h.Id).ToList();
+                        query = query.Where(i => idsAlgolia.Contains(i.Id));
+                    }
+                    else
+                    {
+                        query = query.Where(i => i.Estacion.Contains(q) || i.Descripcion.Contains(q));
+                    }
                 }
                 catch
                 {
