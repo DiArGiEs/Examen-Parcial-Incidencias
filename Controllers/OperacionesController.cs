@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Algolia.Search.Clients;
+using Algolia.Search.Models.Search;
 using Examen_Parcial_Incidencias.Data;
 using Examen_Parcial_Incidencias.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -11,13 +13,19 @@ namespace Examen_Parcial_Incidencias.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly IDistributedCache _cache;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<OperacionesController> _logger;
         private const string CacheKey = "ListadoIncidenciasAbiertas";
 
-        public OperacionesController(ApplicationDbContext context, IDistributedCache cache, ILogger<OperacionesController> logger)
+        public OperacionesController(
+            ApplicationDbContext context,
+            IDistributedCache cache,
+            IConfiguration configuration,
+            ILogger<OperacionesController> logger)
         {
             _context = context;
             _cache = cache;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -27,10 +35,37 @@ namespace Examen_Parcial_Incidencias.Controllers
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                _logger.LogInformation("Consulta con filtro 'q': omitiendo caché y consultando BD.");
-                result = await _context.Incidencias
-                    .Where(i => i.Estado == "Abierta" && (i.Estacion.Contains(q) || i.Descripcion.Contains(q)))
-                    .ToListAsync();
+                _logger.LogInformation("Consulta con filtro 'q': consultando Algolia / BD sin usar caché.");
+                try
+                {
+                    var appId = _configuration["Algolia:AppId"];
+                    var apiKey = _configuration["Algolia:ApiKey"];
+                    var indexName = _configuration["Algolia:IndexName"] ?? "incidencias";
+
+                    if (!string.IsNullOrEmpty(appId) && !string.IsNullOrEmpty(apiKey))
+                    {
+                        var client = new SearchClient(appId, apiKey);
+                        var searchParams = new SearchParams(new SearchParamsObject { Query = q });
+                        var response = await client.SearchSingleIndexAsync<Incidencia>(indexName, searchParams);
+                        var idsAlgolia = response.Hits.Select(h => h.Id).ToList();
+
+                        result = await _context.Incidencias
+                            .Where(i => i.Estado == "Abierta" && idsAlgolia.Contains(i.Id))
+                            .ToListAsync();
+                    }
+                    else
+                    {
+                        result = await _context.Incidencias
+                            .Where(i => i.Estado == "Abierta" && (i.Estacion.Contains(q) || i.Descripcion.Contains(q)))
+                            .ToListAsync();
+                    }
+                }
+                catch
+                {
+                    result = await _context.Incidencias
+                        .Where(i => i.Estado == "Abierta" && (i.Estacion.Contains(q) || i.Descripcion.Contains(q)))
+                        .ToListAsync();
+                }
             }
             else
             {
@@ -41,20 +76,18 @@ namespace Examen_Parcial_Incidencias.Controllers
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning("Redis no disponible en desarrollo local: {Message}", ex.Message);
+                    _logger.LogWarning("Redis no disponible localmente: {Message}", ex.Message);
                 }
 
                 if (!string.IsNullOrEmpty(cachedData))
                 {
-                    _logger.LogInformation("HIT: Lectura realizada directamente desde REDIS.");
+                    _logger.LogInformation("HIT: Lectura desde REDIS.");
                     result = JsonSerializer.Deserialize<List<Incidencia>>(cachedData);
                 }
                 else
                 {
-                    _logger.LogInformation("MISS: Lectura realizada desde la BASE DE DATOS.");
-                    result = await _context.Incidencias
-                        .Where(i => i.Estado == "Abierta")
-                        .ToListAsync();
+                    _logger.LogInformation("MISS: Lectura desde la BASE DE DATOS.");
+                    result = await _context.Incidencias.Where(i => i.Estado == "Abierta").ToListAsync();
 
                     try
                     {
@@ -62,12 +95,11 @@ namespace Examen_Parcial_Incidencias.Controllers
                         {
                             AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60)
                         };
-                        var serialized = JsonSerializer.Serialize(result);
-                        await _cache.SetStringAsync(CacheKey, serialized, options);
+                        await _cache.SetStringAsync(CacheKey, JsonSerializer.Serialize(result), options);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning("No se pudo guardar la clave en Redis: {Message}", ex.Message);
+                        _logger.LogWarning("Error al guardar en Redis: {Message}", ex.Message);
                     }
                 }
             }
@@ -88,11 +120,11 @@ namespace Examen_Parcial_Incidencias.Controllers
                 try
                 {
                     await _cache.RemoveAsync(CacheKey);
-                    _logger.LogInformation("INVALIDACIÓN: Clave {CacheKey} eliminada de Redis.", CacheKey);
+                    _logger.LogInformation("INVALIDACIÓN: Clave de Redis eliminada tras cerrar incidencia.");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning("No se pudo invalidar Redis: {Message}", ex.Message);
+                    _logger.LogWarning("Error al invalidar Redis: {Message}", ex.Message);
                 }
             }
             return RedirectToAction(nameof(Incidencias));
